@@ -5257,6 +5257,34 @@ function runMigrations(db: Database.Database): void {
         `);
       }
     },
+
+    /*
+     * A place that moves takes its Atlas country with it (#2527).
+     *
+     * place_regions caches the country and region Atlas resolved from a
+     * place's coordinates and address, and nothing re-derives a row that is
+     * already there. Correcting a place's location left the old row in charge,
+     * so Atlas, the dashboard stats and the journey stats kept counting the
+     * country the place had just left.
+     *
+     * A trigger rather than a delete in the places code, because the row is
+     * derived from the place and every writer of lat, lng or address has to
+     * let go of it: the place editor, update_place, the plugin RPC, the import
+     * enrichment and its address backfill, and whatever comes next. The WHEN
+     * clause matters because every place edit writes lat, lng and address
+     * back whether they changed or not, and renaming a place must not throw
+     * away a good row. The next Atlas load resolves the place where it is now.
+     */
+    () => {
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS trg_place_regions_follow_place
+        AFTER UPDATE OF lat, lng, address ON places
+        WHEN OLD.lat IS NOT NEW.lat OR OLD.lng IS NOT NEW.lng OR OLD.address IS NOT NEW.address
+        BEGIN
+          DELETE FROM place_regions WHERE place_id = NEW.id;
+        END
+      `);
+    },
   ];
 
   if (currentVersion < migrations.length) {
